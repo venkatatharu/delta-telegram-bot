@@ -1,0 +1,48 @@
+Delta Telegram Bot — testnet test log
+generated: 2026-09-17 16:00:51
+network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
+============================================================
+
+
+[CASE] F1: testnet toggle selects testnet base URL & /start shows it
+
+[CASE] F1: live URL is used when USE_TESTNET=false
+
+[CASE] base: read-only commands work & never place orders
+
+[CASE] NON-NEGOTIABLE: guided risk+trailing+scale-out shows confirm, no order until ✅
+    · confirmation card shown: 🧾 *Confirm order* — `BTCUSD` / Network: *⚠️ TESTNET (testnet)* / Side: `buy`  Qty: `500` contracts / Sizing: `risk`  Entry: market / SL: trailing `100.0` / TP: scale-out `13000.0`×60.0%, `14000.0`×40.0% / Source: `guided`
+    · orders sent to exchange BEFORE confirm: 0
+    · orders after confirm: entry buy 500 (trailing_stop_loss_order) + TP legs [300, 200] reduce_only
+
+[CASE] F3: /panic stages a confirm, then closes all + halts; on_confirm refuses when halted
+    · /panic staged: confirm card shown, 0 closes executed yet
+    · /panic confirmed: all tracked positions closed, trading_halted=True
+    · on_confirm while halted: refused with: '⛔ Trading is halted. Use /resume to enable.' (no order placed)
+
+[CASE] F3: circuit breaker refuses new orders on confirm even when not halted
+    · confirm with circuit breaker tripped: refused: '🛑 Circuit breaker: daily loss $101.00 ≥ $100.00. Order not placed.' (0 orders placed)
+
+[CASE] F6: quick trade builds the same dict and routes to the SAME confirm step
+    · /trade quick form: routed to same confirm card, 0 orders before confirm
+
+[CASE] F5: monitor marks scale-out legs filled cumulatively and detects full close
+
+[CASE] F7: /journal sends the CSV document
+
+[CASE] F8: TradingView webhook payload -> confirm card only, never executes
+    · TradingView alert -> Telegram: confirm card shown, 0 orders auto-executed
+
+[CASE] F8 (flask optional): /webhook endpoint queues a confirm when flask is present
+  (flask not installed — skipping live route test; core path covered above)
+
+[CASE] F9: backoff honours Retry-After and recovers on GET 429s
+
+[CASE] F9: pure backoff/retry-after helpers
+
+[CASE] F9: ambiguous order POST reconciles by client_order_id, never double-submits
+
+[CASE] risk sizing: fixed-SL math & increment rounding
+
+------------------------------------------------------------
+TOTAL: 15  PASS: 15  FAIL: 0

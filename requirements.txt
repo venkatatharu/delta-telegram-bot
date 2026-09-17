@@ -1,0 +1,5 @@
+requests>=2.32.0
+python-dotenv>=1.0.0
+# Optional — only needed for the TradingView webhook (Feature 8).
+# The core bot imports Flask lazily and runs fine without it.
+flask>=3.0.0
