@@ -179,12 +179,12 @@ def circuit_breaker_active() -> bool:
 # ─────────────────────────────────────────────────────────────────────────
 JOURNAL_FIELDS = [
     "timestamp", "event", "symbol", "side", "qty",
-    "entry", "sl", "tp", "network", "note",
+    "entry", "sl", "tp", "pnl", "network", "note",
 ]
 
 
 def journal_append(event: str, trade: dict | None = None, *, symbol: str = "",
-                   side: str = "", qty="", entry="", sl="", tp="", note="") -> None:
+                   side: str = "", qty="", entry="", sl="", tp="", pnl="", note="") -> None:
     """Append one row to trade_journal.csv. Never raises into the caller."""
     trade = trade or {}
     sl = sl if sl != "" else trade.get("sl_price") or (
@@ -192,6 +192,8 @@ def journal_append(event: str, trade: dict | None = None, *, symbol: str = "",
     tp = tp if tp != "" else trade.get("tp_price") or ""
     if not tp and trade.get("tp_legs"):
         tp = ";".join(str(leg.get("price")) for leg in trade["tp_legs"])
+    if pnl == "":
+        pnl = trade.get("pnl", "")
     row = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event,
@@ -199,7 +201,7 @@ def journal_append(event: str, trade: dict | None = None, *, symbol: str = "",
         "side": side or trade.get("side", ""),
         "qty": qty if qty != "" else trade.get("qty", ""),
         "entry": entry if entry != "" else trade.get("entry", ""),
-        "sl": sl, "tp": tp, "network": NETWORK_LABEL, "note": note,
+        "sl": sl, "tp": tp, "pnl": pnl, "network": NETWORK_LABEL, "note": note,
     }
     try:
         new_file = not JOURNAL_FILE.exists()
@@ -734,17 +736,80 @@ def place_trade(delta: DeltaClient, trade: dict) -> dict:
     return order
 
 
+def _extract_fill_price(order) -> float | None:
+    """Best-effort exit fill price from a Delta order / close response."""
+    if not isinstance(order, dict):
+        return None
+    for key in ("average_fill_price", "fill_price", "price"):
+        val = order.get(key)
+        if val not in (None, "", 0, "0"):
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+    fills = order.get("fills")
+    if isinstance(fills, list) and fills and isinstance(fills[0], dict):
+        for key in ("fill_price", "price"):
+            val = fills[0].get(key)
+            if val not in (None, "", 0, "0"):
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
+def record_realized_pnl(delta: DeltaClient, symbol: str, side: str, qty,
+                        entry_price, exit_price) -> float | None:
+    """Book realized PnL for a closed position and update the daily-loss stats.
+
+    Convention matches compute_risk_qty_from_distance: PnL per contract per unit
+    price move is the product's contracting price. Returns the pnl, or None when a
+    price was unavailable (in which case stats are left untouched).
+    """
+    if entry_price is None or exit_price is None:
+        return None
+    contracting = delta.product_contracting_price(symbol) or 1.0
+    qty = float(qty)
+    entry_price = float(entry_price)
+    exit_price = float(exit_price)
+    if str(side).lower() == "buy":
+        pnl = (exit_price - entry_price) * qty * contracting
+    else:
+        pnl = (entry_price - exit_price) * qty * contracting
+
+    stats = state.setdefault("stats", DEFAULT_STATE["stats"])
+    stats["realized_pnl"] = round(float(stats.get("realized_pnl", 0.0)) + pnl, 6)
+    if pnl < 0:
+        stats["losses"] = int(stats.get("losses", 0)) + 1
+        stats["daily_loss"] = round(float(stats.get("daily_loss", 0.0)) + abs(pnl), 6)
+    else:
+        stats["wins"] = int(stats.get("wins", 0)) + 1
+    save_state()
+    return pnl
+
+
 def close_position(delta: DeltaClient, symbol: str, reason: str = "manual") -> None:
-    """Market-close a tracked position. Confirm-gated callers only."""
+    """Market-close a tracked position, book realized PnL, and journal it.
+    Confirm-gated callers only."""
     pos = state["positions"].get(symbol)
     if not pos:
         raise ValueError(f"No tracked position for {symbol}")
     close_side = "sell" if pos["side"] == "buy" else "buy"
-    delta.close_position_market(symbol, int(pos["qty"]), close_side)
+    order = delta.close_position_market(symbol, int(pos["qty"]), close_side)
+
+    # exit price: order fill if present, else the mark price
+    exit_price = _extract_fill_price(order)
+    if exit_price is None:
+        exit_price = delta.mark_price(symbol)
+
+    pnl = record_realized_pnl(delta, symbol, pos["side"], pos["qty"],
+                              pos.get("entry"), exit_price)
     trade = {"symbol": symbol, "side": pos["side"], "qty": pos["qty"],
              "entry": pos.get("entry"), "sl_price": pos.get("sl_price"),
              "tp_price": pos.get("tp_price")}
-    journal_append("close", trade, note=f"{reason}")
+    journal_append("close", trade, pnl=("" if pnl is None else round(pnl, 4)),
+                   note=f"{reason}" + (f" @ exit {exit_price}" if exit_price else ""))
     state["positions"].pop(symbol, None)
     save_state()
 
@@ -1141,7 +1206,9 @@ def cmd_cancel(tg: TelegramClient, chat_id):
 # ─────────────────────────────────────────────────────────────────────────
 def is_owner(user_id) -> bool:
     if not TELEGRAM_OWNER_ID:
-        return True  # no owner configured → single-user dev mode
+        # NOTE: fails OPEN — everyone is treated as the owner. run() logs a loud
+        # CRITICAL warning at startup when this coincides with a non-testnet target.
+        return True
     return str(user_id) == str(TELEGRAM_OWNER_ID)
 
 
@@ -1262,10 +1329,19 @@ def monitor_positions_once(delta: DeltaClient) -> None:
         size = sum(abs(float(p.get("size", 0))) for p in live)
         opened = float(tracked.get("qty", 0) or 0)
         if size == 0 and opened > 0:
-            # position fully gone → TP (or manual) closed it
+            # position fully gone → TP (or manual) closed it. No explicit close
+            # order on this path, so use the last known mark price as the exit.
+            exit_price = delta.mark_price(symbol)
+            entry_price = tracked.get("entry")
+            pnl = None
+            if entry_price is not None and exit_price is not None:
+                pnl = record_realized_pnl(delta, symbol, tracked.get("side"),
+                                          opened, entry_price, exit_price)
             journal_append("close", {"symbol": symbol, "side": tracked.get("side"),
-                                     "qty": opened, "entry": tracked.get("entry")},
-                           note="detected closed on exchange")
+                                     "qty": opened, "entry": entry_price},
+                           pnl=("" if pnl is None else round(pnl, 4)),
+                           note="detected closed on exchange"
+                           + (f" @ exit {exit_price}" if exit_price else ""))
             state["positions"].pop(symbol, None)
             save_state()
             continue
@@ -1410,6 +1486,16 @@ def run(stop_event: threading.Event | None = None) -> None:
     else:
         log.info("🧪 Running against TESTNET")
 
+    # Fail-open owner lock: harmless on local testnet, dangerous with real money.
+    if not TELEGRAM_OWNER_ID and (NETWORK_LABEL == "LIVE" or not USE_TESTNET):
+        log.critical(
+            "🚨 TELEGRAM_OWNER_ID is NOT set while running on %s (%s). "
+            "is_owner() fails OPEN — ANY Telegram user who messages this bot is "
+            "treated as the owner and can place confirm-gated orders. Set "
+            "TELEGRAM_OWNER_ID before running with real money.",
+            NETWORK_LABEL, DELTA_BASE_URL,
+        )
+
     if WEBHOOK_ENABLED:
         start_webhook_server(delta, tg, TELEGRAM_OWNER_ID or "")
 
@@ -1438,6 +1524,10 @@ def main() -> None:  # pragma: no cover - CLI entry
     print(f"  Webhook        : {'on' if WEBHOOK_ENABLED else 'off'} "
           f"{'http://%s:%d/webhook' % (WEBHOOK_HOST, WEBHOOK_PORT)}")
     print("=" * 60)
+    if not TELEGRAM_OWNER_ID and (NETWORK_LABEL == "LIVE" or not USE_TESTNET):
+        print("\n🚨 WARNING: TELEGRAM_OWNER_ID is unset while NOT on testnet — the "
+              "owner-lock fails OPEN and ANY Telegram user can drive this bot "
+              "(place confirm-gated orders). Set TELEGRAM_OWNER_ID before going live.")
     if NETWORK_LABEL == "LIVE" and os.getenv("ACK_LIVE") != "1":
         print("\n⚠️ LIVE trading. Type LIVE to continue:")
         if input("> ").strip() != "LIVE":

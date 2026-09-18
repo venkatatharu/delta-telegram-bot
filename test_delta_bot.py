@@ -539,6 +539,74 @@ def t_risk_math():
     assert bot.round_to_tick(11500.2, 0.5) == 11500.0
 
 
+@test("PnL: losing close updates daily_loss, realized_pnl & losses + journals pnl")
+def t_close_loss_books_pnl():
+    delta, tg, server = fresh()
+    # BTCUSD mark 12345.6, contracting 0.001, size_increment 1
+    # entry 13000 buy, qty 1000 -> (12345.6-13000)*1000*0.001 = -654.4
+    bot.state["positions"]["BTCUSD"] = {"side": "buy", "qty": 1000, "entry": 13000}
+    bot.close_position(delta, "BTCUSD", reason="test-loss")
+    s = bot.state["stats"]
+    assert s["losses"] == 1, s
+    assert s["wins"] == 0, s
+    assert abs(s["realized_pnl"] - (-654.4)) < 1e-6, s
+    assert abs(s["daily_loss"] - 654.4) < 1e-6, s
+    assert "BTCUSD" not in bot.state["positions"]
+    # the close row must carry the realized pnl
+    close_rows = [ln for ln in bot.JOURNAL_FILE.read_text(encoding="utf-8").splitlines()
+                  if ",close," in ln]
+    assert close_rows, "no close row written"
+    assert "654.4" in close_rows[-1], close_rows[-1]
+
+
+@test("PnL: winning close updates wins & realized_pnl, leaves daily_loss at 0")
+def t_close_win_books_pnl():
+    delta, tg, server = fresh()
+    # entry 12000 buy, qty 1000 -> (12345.6-12000)*1000*0.001 = +345.6
+    bot.state["positions"]["BTCUSD"] = {"side": "buy", "qty": 1000, "entry": 12000}
+    bot.close_position(delta, "BTCUSD", reason="test-win")
+    s = bot.state["stats"]
+    assert s["wins"] == 1 and s["losses"] == 0, s
+    assert abs(s["realized_pnl"] - 345.6) < 1e-6, s
+    assert s["daily_loss"] == 0.0, s
+
+
+@test("PnL: monitor's exchange-detected close books PnL at the mark price")
+def t_monitor_close_books_pnl():
+    delta, tg, server = fresh()
+    # entry 13000 buy, qty 1000; get_positions() returns [] -> size 0 -> close path
+    bot.state["positions"]["BTCUSD"] = {"side": "buy", "qty": 1000,
+                                        "entry": 13000, "tp_mode": "single"}
+    bot.monitor_positions_once(delta)
+    s = bot.state["stats"]
+    assert s["losses"] == 1 and abs(s["daily_loss"] - 654.4) < 1e-6, s
+    assert "BTCUSD" not in bot.state["positions"]
+
+
+@test("Circuit breaker actually trips once realized losses cross the cap")
+def t_circuit_breaker_trips_on_realized_loss():
+    orig = bot.MAX_DAILY_LOSS_USDT
+    try:
+        bot.MAX_DAILY_LOSS_USDT = 100.0
+        delta, tg, server = fresh()
+        # one losing close of -654.4 blows past the 100 cap
+        bot.state["positions"]["BTCUSD"] = {"side": "buy", "qty": 1000, "entry": 13000}
+        bot.close_position(delta, "BTCUSD", reason="trip")
+        assert bot.circuit_breaker_active() is True
+        # and a fresh confirm is refused with no order reaching the exchange
+        tr = bot.new_trade_dict()
+        tr.update(symbol="BTCUSD", side="buy", qty=1, market=True,
+                  sl_type="fixed", sl_price=11500, tp_mode="none")
+        tok = bot.store_pending(tr)
+        before = len(server.orders)
+        reply = bot.on_confirm(delta, tg, tok, CHAT, 0)
+        assert "Circuit breaker" in reply, reply
+        assert len(server.orders) == before, "must not place once breaker tripped"
+        assert tok not in bot.state["pending"]
+    finally:
+        bot.MAX_DAILY_LOSS_USDT = orig
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

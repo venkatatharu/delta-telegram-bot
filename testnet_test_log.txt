@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-17 16:00:51
+generated: 2026-09-18 11:47:11
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -44,5 +44,13 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 
 [CASE] risk sizing: fixed-SL math & increment rounding
 
+[CASE] PnL: losing close updates daily_loss, realized_pnl & losses + journals pnl
+
+[CASE] PnL: winning close updates wins & realized_pnl, leaves daily_loss at 0
+
+[CASE] PnL: monitor's exchange-detected close books PnL at the mark price
+
+[CASE] Circuit breaker actually trips once realized losses cross the cap
+
 ------------------------------------------------------------
-TOTAL: 15  PASS: 15  FAIL: 0
+TOTAL: 19  PASS: 19  FAIL: 0
