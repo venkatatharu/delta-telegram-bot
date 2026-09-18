@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-18 11:47:11
+generated: 2026-09-18 13:07:06
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -52,5 +52,11 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 
 [CASE] Circuit breaker actually trips once realized losses cross the cap
 
+[CASE] PnL: partial TP-leg fill realizes PnL at leg price (no trade counted) & no double count on close
+
+[CASE] PnL: partial TP-leg loss accrues daily_loss (circuit breaker) without counting a loss
+
+[CASE] PnL: manual close after a partial leg realizes only the residual qty
+
 ------------------------------------------------------------
-TOTAL: 19  PASS: 19  FAIL: 0
+TOTAL: 22  PASS: 22  FAIL: 0

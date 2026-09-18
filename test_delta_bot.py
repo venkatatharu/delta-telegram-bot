@@ -607,6 +607,81 @@ def t_circuit_breaker_trips_on_realized_loss():
         bot.MAX_DAILY_LOSS_USDT = orig
 
 
+@test("PnL: partial TP-leg fill realizes PnL at leg price (no trade counted) & no double count on close")
+def t_partial_tp_fill_win():
+    delta, tg, server = fresh()
+    # BTCUSD contracting 0.001, mark 12345.6
+    bot.state["positions"]["BTCUSD"] = {
+        "side": "buy", "qty": 500, "entry": 12000, "tp_mode": "scale",
+        "tp_legs": [{"price": 13000, "qty": 300, "pct": 60, "filled": False},
+                    {"price": 14000, "qty": 200, "pct": 40, "filled": False}],
+        "realized_qty": 0,
+    }
+    server.positions["BTCUSD"] = 200          # 300 closed → leg1 filled at 13000
+    bot.monitor_positions_once(delta)
+    s = bot.state["stats"]; pos = bot.state["positions"]["BTCUSD"]
+    # leg1: (13000-12000)*300*0.001 = +300 ; partial → counts a win = False
+    assert abs(s["realized_pnl"] - 300.0) < 1e-6, s
+    assert s["wins"] == 0 and s["losses"] == 0, s
+    assert pos["realized_qty"] == 300 and pos["tp_legs"][0]["filled"]
+    assert not pos["tp_legs"][1].get("filled")
+    plines = [ln for ln in bot.JOURNAL_FILE.read_text(encoding="utf-8").splitlines()
+              if "partial_tp_filled" in ln]
+    assert plines and "300" in plines[-1], plines
+
+    # now flat on the exchange → only the residual 200 is realized at mark price
+    server.positions["BTCUSD"] = 0
+    bot.monitor_positions_once(delta)
+    # residual: (12345.6-12000)*200*0.001 = +69.12 ; total 369.12, one win
+    assert abs(s["realized_pnl"] - 369.12) < 1e-4, s
+    assert s["wins"] == 1 and s["losses"] == 0, s
+    assert "BTCUSD" not in bot.state["positions"]
+
+
+@test("PnL: partial TP-leg loss accrues daily_loss (circuit breaker) without counting a loss")
+def t_partial_tp_fill_loss():
+    orig = bot.MAX_DAILY_LOSS_USDT
+    try:
+        bot.MAX_DAILY_LOSS_USDT = 1000.0
+        delta, tg, server = fresh()
+        bot.state["positions"]["BTCUSD"] = {
+            "side": "buy", "qty": 500, "entry": 13000, "tp_mode": "scale",
+            "tp_legs": [{"price": 12000, "qty": 400, "pct": 80, "filled": False},
+                        {"price": 11000, "qty": 100, "pct": 20, "filled": False}],
+            "realized_qty": 0,
+        }
+        server.positions["BTCUSD"] = 100      # 400 closed → leg1 filled at 12000
+        bot.monitor_positions_once(delta)
+        s = bot.state["stats"]
+        # (12000-13000)*400*0.001 = -400 → daily_loss +400, losses counter untouched
+        assert abs(s["daily_loss"] - 400.0) < 1e-6, s
+        assert s["losses"] == 0 and s["wins"] == 0, s
+        assert abs(s["realized_pnl"] - (-400.0)) < 1e-6, s
+        assert bot.circuit_breaker_active() is False          # 400 < 1000
+        bot.MAX_DAILY_LOSS_USDT = 100.0
+        assert bot.circuit_breaker_active() is True           # realized partial loss trips it
+    finally:
+        bot.MAX_DAILY_LOSS_USDT = orig
+
+
+@test("PnL: manual close after a partial leg realizes only the residual qty")
+def t_close_after_partial():
+    delta, tg, server = fresh()
+    bot.state["positions"]["BTCUSD"] = {
+        "side": "buy", "qty": 500, "entry": 12000, "tp_mode": "scale",
+        "tp_legs": [{"price": 13000, "qty": 300, "pct": 60, "filled": True},
+                    {"price": 14000, "qty": 200, "pct": 40, "filled": False}],
+        "realized_qty": 300,
+    }
+    bot.state["stats"]["realized_pnl"] = 300.0     # the already-booked leg1
+    bot.close_position(delta, "BTCUSD", reason="manual")
+    s = bot.state["stats"]
+    # residual 200 @ mark 12345.6 → +69.12 ; total 369.12, one win, no daily loss
+    assert abs(s["realized_pnl"] - 369.12) < 1e-4, s
+    assert s["wins"] == 1 and s["daily_loss"] == 0.0, s
+    assert "BTCUSD" not in bot.state["positions"]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

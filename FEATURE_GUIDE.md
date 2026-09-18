@@ -122,6 +122,12 @@ code path after the point of parsing.
   `monitor_positions_once()` compares exchange position size against the tracked
   size, marks legs filled proportionally and journals `partial_tp_filled`, and
   journals a `close` + drops the position when the size reaches zero.
+- **Realized PnL on scale-out:** each newly filled leg books its own realized PnL
+  via `record_realized_pnl(..., count_trade=False)` at the leg's TP price, so it
+  accrues to `realized_pnl` and to `daily_loss` (on a loss) **without** moving the
+  `wins`/`losses` tally. The filled qty is added to the tracked `realized_qty`, and
+  the full-close path (manual `/close`, `/panic`, or exchange-detected) then realizes
+  only the **residual** (`qty − realized_qty`) so partial fills are never double-counted.
 
 ## Feature 6 — One-line quick trade
 
@@ -134,9 +140,10 @@ code path after the point of parsing.
 ## Feature 7 — Trade journal
 
 - `journal_append()` writes `trade_journal.csv` with columns
-  `timestamp,event,symbol,side,qty,entry,sl,tp,network,note`.
+  `timestamp,event,symbol,side,qty,entry,sl,tp,pnl,network,note`.
 - `open` on entry, `close` on manual/panic/exchange-detected close,
-  `partial_tp_filled` on scale-out leg fills.
+  `partial_tp_filled` on scale-out leg fills; `close` and `partial_tp_filled` rows
+  carry the realized `pnl` for that (residual) quantity.
 - `/journal` sends the CSV back via Telegram (`sendDocument`).
 - Writes are best-effort and never raise into the trading path.
 

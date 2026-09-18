@@ -726,6 +726,7 @@ def place_trade(delta: DeltaClient, trade: dict) -> dict:
         "tp_mode": trade.get("tp_mode"),
         "tp_price": trade.get("tp_price"),
         "tp_legs": trade.get("tp_legs"),
+        "realized_qty": 0,
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "order_id": order.get("id"),
     }
@@ -760,12 +761,16 @@ def _extract_fill_price(order) -> float | None:
 
 
 def record_realized_pnl(delta: DeltaClient, symbol: str, side: str, qty,
-                        entry_price, exit_price) -> float | None:
-    """Book realized PnL for a closed position and update the daily-loss stats.
+                        entry_price, exit_price,
+                        count_trade: bool = True) -> float | None:
+    """Book realized PnL and update the daily-loss stats.
 
     Convention matches compute_risk_qty_from_distance: PnL per contract per unit
-    price move is the product's contracting price. Returns the pnl, or None when a
-    price was unavailable (in which case stats are left untouched).
+    price move is the product's contracting price. realized_pnl is always updated
+    and a negative pnl always accrues to daily_loss (so scale-out losses still trip
+    the circuit breaker). The wins/losses tally only moves when count_trade is True;
+    partial scale-out legs pass count_trade=False so they don't inflate it. Returns
+    the pnl, or None when a price was unavailable (in which case stats are untouched).
     """
     if entry_price is None or exit_price is None:
         return None
@@ -781,9 +786,10 @@ def record_realized_pnl(delta: DeltaClient, symbol: str, side: str, qty,
     stats = state.setdefault("stats", DEFAULT_STATE["stats"])
     stats["realized_pnl"] = round(float(stats.get("realized_pnl", 0.0)) + pnl, 6)
     if pnl < 0:
-        stats["losses"] = int(stats.get("losses", 0)) + 1
         stats["daily_loss"] = round(float(stats.get("daily_loss", 0.0)) + abs(pnl), 6)
-    else:
+        if count_trade:
+            stats["losses"] = int(stats.get("losses", 0)) + 1
+    elif count_trade:
         stats["wins"] = int(stats.get("wins", 0)) + 1
     save_state()
     return pnl
@@ -803,13 +809,18 @@ def close_position(delta: DeltaClient, symbol: str, reason: str = "manual") -> N
     if exit_price is None:
         exit_price = delta.mark_price(symbol)
 
-    pnl = record_realized_pnl(delta, symbol, pos["side"], pos["qty"],
-                              pos.get("entry"), exit_price)
-    trade = {"symbol": symbol, "side": pos["side"], "qty": pos["qty"],
+    # Realize PnL only on the residual still-open quantity — any scale-out legs
+    # already filled had their PnL booked at each leg's TP price.
+    residual = int(pos["qty"]) - int(pos.get("realized_qty", 0) or 0)
+    pnl = (record_realized_pnl(delta, symbol, pos["side"], residual,
+                               pos.get("entry"), exit_price)
+           if residual > 0 else 0.0)
+    trade = {"symbol": symbol, "side": pos["side"], "qty": residual,
              "entry": pos.get("entry"), "sl_price": pos.get("sl_price"),
              "tp_price": pos.get("tp_price")}
     journal_append("close", trade, pnl=("" if pnl is None else round(pnl, 4)),
-                   note=f"{reason}" + (f" @ exit {exit_price}" if exit_price else ""))
+                   note=f"{reason}" + (f" @ exit {exit_price}" if exit_price else "")
+                   + (f" residual {residual}/{pos['qty']}" if residual != int(pos["qty"]) else ""))
     state["positions"].pop(symbol, None)
     save_state()
 
@@ -1331,17 +1342,23 @@ def monitor_positions_once(delta: DeltaClient) -> None:
         if size == 0 and opened > 0:
             # position fully gone → TP (or manual) closed it. No explicit close
             # order on this path, so use the last known mark price as the exit.
+            # Realize only the residual still-open qty (legs already filled had
+            # their PnL booked at each leg's TP price).
             exit_price = delta.mark_price(symbol)
             entry_price = tracked.get("entry")
+            residual = int(opened) - int(tracked.get("realized_qty", 0) or 0)
             pnl = None
-            if entry_price is not None and exit_price is not None:
+            if residual > 0 and entry_price is not None and exit_price is not None:
                 pnl = record_realized_pnl(delta, symbol, tracked.get("side"),
-                                          opened, entry_price, exit_price)
+                                          residual, entry_price, exit_price)
+            elif residual <= 0:
+                pnl = 0.0
             journal_append("close", {"symbol": symbol, "side": tracked.get("side"),
-                                     "qty": opened, "entry": entry_price},
+                                     "qty": max(residual, 0), "entry": entry_price},
                            pnl=("" if pnl is None else round(pnl, 4)),
                            note="detected closed on exchange"
-                           + (f" @ exit {exit_price}" if exit_price else ""))
+                           + (f" @ exit {exit_price}" if exit_price else "")
+                           + (f" residual {residual}/{int(opened)}" if residual != int(opened) else ""))
             state["positions"].pop(symbol, None)
             save_state()
             continue
@@ -1356,10 +1373,20 @@ def monitor_positions_once(delta: DeltaClient) -> None:
                 # cumulative size of that leg (legs scale out in order).
                 if closed_so_far >= cumulative:
                     leg["filled"] = True
+                    entry_price = tracked.get("entry")
+                    pnl = None
+                    if entry_price is not None and leg.get("price") is not None:
+                        pnl = record_realized_pnl(delta, symbol, tracked.get("side"),
+                                                  leg["qty"], entry_price, leg["price"],
+                                                  count_trade=False)
+                        tracked["realized_qty"] = int(tracked.get("realized_qty", 0) or 0) \
+                            + int(leg["qty"])
                     journal_append("partial_tp_filled",
                                    {"symbol": symbol, "side": tracked.get("side"),
                                     "qty": leg["qty"], "tp_price": leg["price"]},
-                                   note="scale-out leg filled")
+                                   pnl=("" if pnl is None else round(pnl, 4)),
+                                   note="scale-out leg filled"
+                                   + (f" @ exit {leg['price']}" if leg.get("price") else ""))
                     save_state()
 
 
