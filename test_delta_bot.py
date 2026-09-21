@@ -189,9 +189,12 @@ class FakeServer:
             return FakeResp(200, {"success": True, "result": {
                 "symbol": sym, "mark_price": mp, "spot_price": mp, "close": mp}})
         if path == "/v2/wallet/balances":
-            return FakeResp(200, {"success": True, "result": [
-                {"asset": "USDT", "balance": 1000.0, "available_balance": 900.0},
-                {"asset": "BTC", "balance": 0.5, "available_balance": 0.5}]})
+            return FakeResp(200, {"success": True,
+                "meta": {"net_equity": "56099.4"},
+                "result": [
+                    {"asset_symbol": "USDT", "asset_id": 3, "balance": "1000", "available_balance": "900"},
+                    {"asset_symbol": "BTC", "asset_id": 2, "balance": "0.25", "available_balance": "0.25"},
+                    {"asset_symbol": "ETH", "asset_id": 1, "balance": "10", "available_balance": "10"}]})
         if path == "/v2/positions":
             result = [{"product_symbol": s, "size": sz, "entry_price": 12345.6,
                        "unrealized_pnl": 1.23} for s, sz in self.positions.items()]
@@ -300,6 +303,9 @@ def t_readonly():
     bot.cmd_pnl(delta, tg, CHAT)
     assert any("Balances" in t for t in tg.texts())
     assert any("P&L" in t for t in tg.texts())
+    bal = next(t for t in tg.texts() if "Balances" in t)
+    assert "Net equity" in bal and "56,099.40" in bal, bal   # meta.net_equity surfaced
+    assert "USDT" in bal and "?" not in bal, bal              # currency resolved, no '?'
     assert server.orders == [], "read-only commands must not submit orders"
 
 
@@ -516,7 +522,7 @@ def t_backoff_429():
     delta.session = server.session
     server.status_seq[("GET", "/v2/wallet/balances")] = [429, 429, 200]
     res = delta.get_balance()          # should retry through the two 429s
-    assert res and res[0]["asset"] == "USDT"
+    assert res and res["result"][0]["asset_symbol"] == "USDT"
     assert server.counts[("GET", "/v2/wallet/balances")] == 3
 
 

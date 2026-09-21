@@ -407,9 +407,9 @@ class DeltaClient:
         return float(mp) if mp else None
 
     # -- account ----------------------------------------------------------
-    def get_balance(self) -> list[dict]:
-        data = self._request("GET", "/v2/wallet/balances", auth=True)
-        return data.get("result", [])
+    def get_balance(self) -> dict:
+        # Full payload: {"result": [per-asset balances], "meta": {"net_equity": ...}}
+        return self._request("GET", "/v2/wallet/balances", auth=True)
 
     def get_positions(self, symbol: str | None = None) -> list[dict]:
         params = None
@@ -961,11 +961,16 @@ def cmd_help(tg: TelegramClient, chat_id):
 
 def cmd_balance(delta: DeltaClient, tg: TelegramClient, chat_id):
     try:
-        balances = delta.get_balance()
+        resp = delta.get_balance()
     except Exception as exc:
         tg.send_message(chat_id, f"⚠️ Balance fetch failed: {exc}")
         return
+    balances = resp.get("result", []) if isinstance(resp, dict) else resp
+    meta = resp.get("meta", {}) if isinstance(resp, dict) else {}
     lines = [f"💰 *Balances* ({NETWORK_LABEL})"]
+    equity = meta.get("net_equity")
+    if equity:
+        lines.insert(1, f"Net equity: ≈ `{float(equity):,.2f}` USDT (all assets)")
     for b in balances[:15]:
         asset = (b.get("asset_symbol") or b.get("currency") or b.get("asset")
                  or b.get("symbol")
