@@ -32,9 +32,20 @@ try:  # the console on Windows defaults to cp1252 and can't encode emoji
 except Exception:
     pass
 
-# Force testnet BEFORE importing the module so module-level config locks to it.
+# ── Force testnet + DUMMY credentials BEFORE importing the module ──────────
+# load_dotenv() (override=False) never clobbers vars already in os.environ, so
+# setting these here makes the harness hermetic — an operator's real .env in the
+# project folder cannot leak in and change behaviour (notably TELEGRAM_OWNER_ID,
+# which otherwise flips is_owner()'s fail-open dev mode).
+TEST_OWNER = "111"
 os.environ["USE_TESTNET"] = "true"
 os.environ.pop("DELTA_BASE_URL", None)
+os.environ["TELEGRAM_OWNER_ID"] = TEST_OWNER
+os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+os.environ["DELTA_API_KEY"] = "test-key"
+os.environ["DELTA_API_SECRET"] = "test-secret"
+os.environ["MAX_DAILY_LOSS_USDT"] = "100"
+os.environ["WEBHOOK_ENABLED"] = "false"
 _TMP = tempfile.mkdtemp(prefix="deltatest_")  # outside OneDrive to avoid file locks
 os.environ["DELTA_STATE_FILE"] = os.path.join(_TMP, "delta_bot_state.json")
 os.environ["DELTA_JOURNAL_FILE"] = os.path.join(_TMP, "trade_journal.csv")
@@ -50,7 +61,7 @@ PRODUCTS = [
     {"id": 2, "symbol": "ETHUSD", "tick_size": 0.05, "contracting_price": 0.01,
      "size_delta": 1, "min_size": 1, "mark_price": 3000.0, "market_price": 3000.0},
 ]
-OWNER = "111"
+OWNER = TEST_OWNER
 CHAT = 555
 
 # Never actually sleep during retry tests.

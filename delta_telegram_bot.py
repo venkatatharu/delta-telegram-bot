@@ -541,16 +541,17 @@ class TelegramClient:
         self._offset = 0
         self.session = requests.Session()
 
-    def _api(self, method: str, payload: dict, files=None):
+    def _api(self, method: str, payload: dict, files=None, req_timeout: int = 20):
         if not self.token:
             log.info("[Telegram disabled] %s %s", method, str(payload)[:120])
             return {"ok": False, "disabled": True}
         try:
             if files:
                 resp = self.session.post(f"{self.base}/{method}", data=payload,
-                                         files=files, timeout=20)
+                                         files=files, timeout=req_timeout)
             else:
-                resp = self.session.post(f"{self.base}/{method}", json=payload, timeout=20)
+                resp = self.session.post(f"{self.base}/{method}", json=payload,
+                                         timeout=req_timeout)
             return resp.json()
         except Exception as exc:  # pragma: no cover - network
             log.error("Telegram %s failed: %s", method, exc)
@@ -580,9 +581,13 @@ class TelegramClient:
                          {"callback_query_id": callback_id, "text": text})
 
     def get_updates(self, timeout: int = 25) -> list[dict]:
+        if not self.token:
+            time.sleep(2)
+            return []
         payload = {"offset": self._offset, "timeout": timeout,
                    "allowed_updates": ["message", "callback_query"]}
-        res = self._api("getUpdates", payload)
+        # Read timeout must exceed the long-poll hold window or idle polls error.
+        res = self._api("getUpdates", payload, req_timeout=timeout + 10)
         updates = res.get("result", []) if res.get("ok") else []
         for upd in updates:
             self._offset = max(self._offset, upd["update_id"] + 1)
@@ -1551,6 +1556,16 @@ def main() -> None:  # pragma: no cover - CLI entry
     print(f"  Webhook        : {'on' if WEBHOOK_ENABLED else 'off'} "
           f"{'http://%s:%d/webhook' % (WEBHOOK_HOST, WEBHOOK_PORT)}")
     print("=" * 60)
+    if not TELEGRAM_BOT_TOKEN:
+        print("\n❌ TELEGRAM_BOT_TOKEN is not configured.")
+        print("To run the bot:")
+        print("  1. Copy .env.example to .env:  cp .env.example .env")
+        print("  2. Add your Telegram bot token from @BotFather")
+        print("  3. Add your numeric Telegram user ID from @userinfobot")
+        print("  4. Add your Delta Exchange API key and secret")
+        print("\nTo test without live credentials, run the test harness:")
+        print("  python -X utf8 test_delta_bot.py\n")
+        sys.exit(1)
     if not TELEGRAM_OWNER_ID and (NETWORK_LABEL == "LIVE" or not USE_TESTNET):
         print("\n🚨 WARNING: TELEGRAM_OWNER_ID is unset while NOT on testnet — the "
               "owner-lock fails OPEN and ANY Telegram user can drive this bot "

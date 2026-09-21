@@ -1,7 +1,7 @@
-# credentials & local env
+# credentials & local env — ignore ALL env variants, keep the template
 .env
 .env.local
-# keep the committed template:
+.env.*
 !.env.example
 
 # runtime artifacts
