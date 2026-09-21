@@ -1,8 +1,9 @@
 # Delta Exchange — Telegram Trading Bot 🤖
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)]
-[![Exchange](https://img.shields.io/badge/Exchange-Delta%20India-orange)]
-[![Default](https://img.shields.io/badge/Default-Testnet-brightgreen)]
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
+![Exchange](https://img.shields.io/badge/Exchange-Delta%20India-orange)
+![Default](https://img.shields.io/badge/Default-Testnet-brightgreen)
+[![tests](https://github.com/venkatatharu/delta-telegram-bot/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/venkatatharu/delta-telegram-bot/actions/workflows/tests.yml)
 
 A **manual, human-in-the-loop** trading bot for **Delta Exchange India**, driven
 entirely from Telegram. It is **not** an algorithmic/auto-trading bot: there is no
