@@ -967,7 +967,10 @@ def cmd_balance(delta: DeltaClient, tg: TelegramClient, chat_id):
         return
     lines = [f"💰 *Balances* ({NETWORK_LABEL})"]
     for b in balances[:15]:
-        lines.append(f"• `{b.get('asset','?')}`: "
+        asset = (b.get("asset_symbol") or b.get("currency") or b.get("asset")
+                 or b.get("symbol")
+                 or (f"asset#{b.get('asset_id')}" if b.get("asset_id") is not None else "?"))
+        lines.append(f"• `{asset}`: "
                      f"total {float(b.get('balance',0)):.4f} / "
                      f"avail {float(b.get('available_balance',0)):.4f}")
     tg.send_message(chat_id, "\n".join(lines))
