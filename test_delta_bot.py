@@ -148,7 +148,13 @@ class FakeServer:
 
     def handle(self, method, url, body):
         method = method.upper()
-        path = url.split(bot.DELTA_BASE_URL, 1)[-1].split("?", 1)[0]
+        rest = url.split(bot.DELTA_BASE_URL, 1)[-1]
+        path, _, qs = rest.partition("?")
+        query = {}
+        for pair in qs.split("&"):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                query.setdefault(k, v)
         key = (method, path)
         self.bump(key)
 
@@ -196,6 +202,12 @@ class FakeServer:
                     {"asset_symbol": "BTC", "asset_id": 2, "balance": "0.25", "available_balance": "0.25"},
                     {"asset_symbol": "ETH", "asset_id": 1, "balance": "10", "available_balance": "10"}]})
         if path == "/v2/positions":
+            if "product_id" in query:
+                pid = int(query["product_id"])
+                sym = next((p["symbol"] for p in PRODUCTS if p["id"] == pid), None)
+                return FakeResp(200, {"success": True, "result": {
+                    "size": self.positions.get(sym, 0), "entry_price": 12345.6,
+                    "unrealized_pnl": 1.23, "product_symbol": sym}})
             result = [{"product_symbol": s, "size": sz, "entry_price": 12345.6,
                        "unrealized_pnl": 1.23} for s, sz in self.positions.items()]
             return FakeResp(200, {"success": True, "result": result})

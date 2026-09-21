@@ -418,11 +418,21 @@ class DeltaClient:
         return self._request("GET", "/v2/wallet/balances", auth=True)
 
     def get_positions(self, symbol: str | None = None) -> list[dict]:
-        params = None
-        if symbol:
-            params = {"product_ids": self.get_product(symbol).get("id")}
-        data = self._request("GET", "/v2/positions", params=params, auth=True)
-        return data.get("result", [])
+        # v2 has no unfiltered "all positions" endpoint — it requires a
+        # product_id (singular). Callers iterate tracked symbols.
+        if not symbol:
+            return []
+        pid = self.get_product(symbol).get("id")
+        data = self._request("GET", "/v2/positions", params={"product_id": pid}, auth=True)
+        res = data.get("result", [])
+        if isinstance(res, dict):          # product_id form returns a single object
+            res = [res] if res else []
+        out = []
+        for p in res or []:
+            p = dict(p)
+            p.setdefault("product_symbol", symbol.upper())
+            out.append(p)
+        return out
 
     def get_order_history(self, symbol: str) -> list[dict]:
         pid = self.get_product(symbol).get("id")
@@ -1086,32 +1096,43 @@ def cmd_balance(delta: DeltaClient, tg: TelegramClient, chat_id):
     tg.send_message(chat_id, "\n".join(lines))
 
 
-def cmd_positions(delta: DeltaClient, tg: TelegramClient, chat_id):
-    try:
-        positions = delta.get_positions()
-    except Exception as exc:
-        tg.send_message(chat_id, f"⚠️ Positions fetch failed: {exc}")
+def cmd_positions(delta: DeltaClient, tg: TelegramClient, chat_id, symbol: str | None = None):
+    symbols = [symbol.upper()] if symbol else list(state["positions"].keys())
+    if not symbols:
+        tg.send_message(chat_id,
+            "📭 No positions tracked by the bot. Use /trade to open, or "
+            "`/positions BTCUSD` to check a specific market.")
         return
-    open_pos = [p for p in positions if abs(float(p.get("size", 0))) > 0]
-    if not open_pos:
-        tg.send_message(chat_id, "📭 No open positions on the exchange.")
-        return
-    lines = [f"📊 *Open positions* ({NETWORK_LABEL})"]
-    for p in open_pos:
-        upnl = float(p.get("unrealized_pnl", 0))
-        lines.append(f"• `{p.get('product_symbol','?')}` {p.get('size')} @ "
-                     f"{p.get('entry_price')} | uPnL {upnl:.2f}")
+    lines = [f"📊 *Positions* ({NETWORK_LABEL})"]
+    any_open = False
+    for sym in symbols:
+        try:
+            rows = [p for p in delta.get_positions(sym) if abs(float(p.get("size", 0) or 0)) > 0]
+        except Exception as exc:
+            lines.append(f"• `{sym}`: fetch failed ({exc})")
+            continue
+        if not rows:
+            lines.append(f"• `{sym}`: flat (no open position)")
+            continue
+        any_open = True
+        for p in rows:
+            upnl = float(p.get("unrealized_pnl", 0) or 0)
+            lines.append(f"• `{p.get('product_symbol', sym)}` {p.get('size')} @ "
+                         f"{p.get('entry_price')} | uPnL {upnl:.2f}")
+    if not any_open and len(lines) == 1:
+        lines.append("— all flat —")
     tg.send_message(chat_id, "\n".join(lines))
 
 
 def cmd_pnl(delta: DeltaClient, tg: TelegramClient, chat_id):
     stats = state["stats"]
     unrealised = 0.0
-    try:
-        for p in delta.get_positions():
-            unrealised += float(p.get("unrealized_pnl", 0))
-    except Exception:
-        pass
+    for sym in list(state["positions"].keys()):
+        try:
+            for p in delta.get_positions(sym):
+                unrealised += float(p.get("unrealized_pnl", 0) or 0)
+        except Exception:
+            pass
     winrate = (stats["wins"] / stats["total_trades"] * 100) if stats["total_trades"] else 0
     tg.send_message(chat_id,
         "📈 *P&L*\n"
@@ -1430,7 +1451,8 @@ def handle_message(delta: DeltaClient, tg: TelegramClient, chat_id, user_id, tex
     elif low.startswith("/balance"):
         cmd_balance(delta, tg, chat_id)
     elif low.startswith("/positions"):
-        cmd_positions(delta, tg, chat_id)
+        parts = text.split()
+        cmd_positions(delta, tg, chat_id, parts[1] if len(parts) > 1 else None)
     elif low.startswith("/pnl"):
         cmd_pnl(delta, tg, chat_id)
     elif low.startswith("/journal"):
@@ -1526,8 +1548,7 @@ def monitor_positions_once(delta: DeltaClient) -> None:
     for symbol in list(state["positions"].keys()):
         tracked = state["positions"][symbol]
         try:
-            live = [p for p in delta.get_positions()
-                    if str(p.get("product_symbol", "")).upper() == symbol.upper()]
+            live = delta.get_positions(symbol)
         except Exception as exc:
             log.debug("monitor poll failed for %s: %s", symbol, exc)
             continue
