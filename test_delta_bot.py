@@ -768,6 +768,39 @@ def t_confirm_blocks_zero_size():
     assert tok not in bot.state["pending"]
 
 
+@test("App-like guided flow: market info + LIMIT order + custom leverage")
+def t_guided_limit_and_leverage():
+    delta, tg, server = fresh()
+    msg(delta, tg, "/trade")
+    bot.handle_guided_text(delta, tg, CHAT, "BTCUSD")
+    # market-info card shown after the symbol
+    mi = next((t for t in tg.texts() if "— Futures" in t), None)
+    assert mi and "Last/Mark" in mi, tg.texts()
+    cb(delta, tg, "side:buy")            # -> order_type
+    assert any("Order type?" in t for t in tg.texts())
+    cb(delta, tg, "ot:limit")            # -> limit_price
+    bot.handle_guided_text(delta, tg, CHAT, "80000")   # -> leverage
+    assert any("Set leverage" in t for t in tg.texts())
+    cb(delta, tg, "lev:custom")          # -> leverage_input
+    bot.handle_guided_text(delta, tg, CHAT, "25")      # -> sizing
+    cb(delta, tg, "sizing:fixed")
+    bot.handle_guided_text(delta, tg, CHAT, "10")      # qty
+    cb(delta, tg, "slmode:fixed")
+    bot.handle_guided_text(delta, tg, CHAT, "78000")   # sl
+    cb(delta, tg, "tpmode:none")                        # -> confirm
+
+    token, mid = tg.find_keyboard("cfm:")
+    assert token, "expected confirm card"
+    tr = bot.state["pending"][token]
+    assert tr["market"] is False and tr["entry"] == 80000.0
+    assert tr["leverage"] == 25 and tr["qty"] == 10
+    card = next(m for m in reversed(tg.sent)
+                if any(b.get("callback_data", "").endswith(token)
+                       for row in (m.get("keyboard") or []) for b in row))
+    assert "Order: Limit @ `80000.0`" in card["text"], card["text"]
+    assert "Leverage: `25x`" in card["text"], card["text"]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

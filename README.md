@@ -21,7 +21,7 @@ signal generation and nothing executes on its own.
 |---|---|
 | `/start` | Shows the active **network** (TESTNET/LIVE) + trading state |
 | `/help` | Command reference |
-| `/trade` | Guided flow: coin → side → **Fixed qty or Risk-based** sizing → **Fixed or Trailing SL** → **single TP or scale-out** → confirm |
+| `/trade` | App-like guided flow: symbol (shows **market type + live price**) → side → **Market/Limit** → **leverage** (5/10/20/50 or custom) → **Fixed/Risk** sizing → **Fixed/Trailing SL** → **single/scale-out TP** → confirm |
 | `/trade SYMBOL side qty entry sl=X tp=Y` | One-line quick trade (also `trail=`/`lev=`, `entry=market`) → the **same** confirm step |
 | `/positions` | Open positions from the exchange |
 | `/balance` | Wallet balances |

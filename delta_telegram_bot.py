@@ -648,8 +648,8 @@ def compute_risk_qty(delta: DeltaClient, risk_amount: float, entry: float,
 drafts: dict[str, dict] = {}
 
 TRADE_STEPS = [
-    "symbol", "side", "sizing",
-    "qty", "risk_amount", "sl_mode",
+    "symbol", "side", "order_type", "limit_price", "leverage", "leverage_input",
+    "sizing", "qty", "risk_amount", "sl_mode",
     "sl_price", "trail_amount", "tp_mode",
     "tp_price", "tp_leg1_price", "tp_leg1_pct",
     "tp_leg2_price", "confirm",
@@ -679,9 +679,9 @@ def build_confirmation_text(trade: dict, margin_line: str | None = None) -> str:
     lines = [f"🧾 *Confirm order* — `{trade['symbol']}`",
              f"Network: *{net}*",
              f"Side: `{trade['side']}`  Qty: `{trade['qty']}` contracts",
-             f"Sizing: `{trade['sizing']}`  Entry: " +
-             (f"`{trade['entry']}` (limit)" if trade.get("entry") and not trade.get("market")
-              else "market")]
+             "Order: " + (f"Limit @ `{trade['entry']}`" if trade.get("entry") and not trade.get("market")
+                          else "Market"),
+             f"Leverage: `{trade.get('leverage', 10)}x`  Sizing: `{trade['sizing']}`"]
     if trade.get("sl_type") == "trailing":
         lines.append(f"SL: trailing `{trade['trail_amount']}`")
     elif trade.get("sl_price"):
@@ -1172,6 +1172,37 @@ def cmd_close(delta: DeltaClient, tg: TelegramClient, chat_id, symbol: str) -> N
 
 
 # ── Guided /trade flow ──────────────────────────────────────────────────
+def contract_kind(prod: dict) -> str:
+    ct = str(prod.get("contract_type", "") or "").lower()
+    if "option" in ct:
+        return "Options"
+    if "spot" in ct:
+        return "Spot"
+    return "Futures"
+
+
+def market_info(delta: DeltaClient, symbol: str) -> str:
+    """App-like snapshot of a market (kind, price, tick, contract value, leverage)."""
+    try:
+        prod = delta.get_product(symbol)
+        kind = contract_kind(prod)
+        mp = delta.mark_price(symbol)
+        lines = [f"📊 *{symbol.upper()}* — {kind}",
+                 f"Last/Mark: `{mp if mp else 'n/a'}`",
+                 f"Tick: `{prod.get('tick_size')}`  Contract value: `{prod.get('contract_value')}`"]
+        dl = prod.get("default_leverage")
+        if dl:
+            try:
+                lines.append(f"Default leverage: `{float(dl):g}x`")
+            except (TypeError, ValueError):
+                pass
+        if kind != "Futures":
+            lines.append("⚠️ This bot places *futures/perpetual* orders only.")
+        return "\n".join(lines)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"📊 *{symbol.upper()}* (market info unavailable: {exc})"
+
+
 def _prompt_for_step(tg: TelegramClient, chat_id, draft: dict):
     """Ask the question for draft['step'] with appropriate buttons."""
     step = draft["step"]
@@ -1182,6 +1213,22 @@ def _prompt_for_step(tg: TelegramClient, chat_id, draft: dict):
         draft["prompt_msg_id"] = _send_kb(tg, chat_id, "Long or Short?",
             [[{"text": "🟢 Long (buy)", "callback_data": "side:buy"},
               {"text": "🔴 Short (sell)", "callback_data": "side:sell"}]])
+    elif step == "order_type":
+        draft["prompt_msg_id"] = _send_kb(tg, chat_id, "Order type?",
+            [[{"text": "📈 Market", "callback_data": "ot:market"},
+              {"text": "🎯 Limit", "callback_data": "ot:limit"}]])
+    elif step == "limit_price":
+        tg.send_message(chat_id, f"Enter your LIMIT price for `{trade['symbol']}` "
+                                 f"(current mark `{trade.get('entry')}`).")
+    elif step == "leverage":
+        draft["prompt_msg_id"] = _send_kb(tg, chat_id, "Set leverage:",
+            [[{"text": "5x", "callback_data": "lev:5"},
+              {"text": "10x", "callback_data": "lev:10"},
+              {"text": "20x", "callback_data": "lev:20"},
+              {"text": "50x", "callback_data": "lev:50"}],
+             [{"text": "✏️ Custom…", "callback_data": "lev:custom"}]])
+    elif step == "leverage_input":
+        tg.send_message(chat_id, "Type the leverage as a number (e.g. `15`).")
     elif step == "sizing":
         draft["prompt_msg_id"] = _send_kb(tg, chat_id, "How should I size the position?",
             [[{"text": "Fixed quantity", "callback_data": "sizing:fixed"},
@@ -1236,7 +1283,18 @@ def handle_guided_text(delta: DeltaClient, tg: TelegramClient, chat_id, text: st
         if step == "symbol":
             trade["symbol"] = text.strip().upper()
             delta.get_product(trade["symbol"])  # validate the market exists
+            tg.send_message(chat_id, market_info(delta, trade["symbol"]))
             draft["step"] = "side"
+        elif step == "limit_price":
+            trade["entry"] = float(text)
+            trade["market"] = False
+            draft["step"] = "leverage"
+        elif step == "leverage_input":
+            lev = float(text)
+            if lev < 1:
+                raise ValueError("leverage must be at least 1")
+            trade["leverage"] = int(lev) if float(lev).is_integer() else lev
+            draft["step"] = "sizing"
         elif step == "qty":
             trade["qty"] = int(float(text))
             draft["step"] = "sl_mode"
@@ -1306,7 +1364,20 @@ def handle_guided_callback(delta: DeltaClient, tg: TelegramClient, chat_id, data
         trade["side"] = data.split(":", 1)[1]
         # entry price: capture now for risk math & limit defaulting
         trade["entry"] = delta.mark_price(trade["symbol"])
-        draft["step"] = "sizing"
+        draft["step"] = "order_type"
+    elif data.startswith("ot:"):
+        if data.split(":", 1)[1] == "limit":
+            draft["step"] = "limit_price"
+        else:
+            trade["market"] = True
+            draft["step"] = "leverage"
+    elif data.startswith("lev:"):
+        v = data.split(":", 1)[1]
+        if v == "custom":
+            draft["step"] = "leverage_input"
+        else:
+            trade["leverage"] = int(float(v))
+            draft["step"] = "sizing"
     elif data.startswith("sizing:"):
         trade["sizing"] = data.split(":", 1)[1]
         draft["step"] = "qty" if trade["sizing"] == "fixed" else "risk_amount"
