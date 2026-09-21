@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-21 09:21:48
+generated: 2026-09-21 11:47:40
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -22,6 +22,11 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 
 [CASE] F3: circuit breaker refuses new orders on confirm even when not halted
     · confirm with circuit breaker tripped: refused: '🛑 Circuit breaker: daily loss $101.00 ≥ $100.00. Order not placed.' (0 orders placed)
+
+[CASE] Margin guard: blocks a trade whose required margin exceeds available USDT
+    · oversized confirm: blocked: '🛑 Blocked: this trade needs ≈ $1,200.00 margin but only $900.00 USDT is available in your FNO wallet. Reduce size/risk, lower leverage, or transfer Spot → Futures.'
+
+[CASE] Margin guard: allows a trade that fits within available USDT
 
 [CASE] F6: quick trade builds the same dict and routes to the SAME confirm step
     · /trade quick form: routed to same confirm card, 0 orders before confirm
@@ -59,4 +64,4 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 [CASE] PnL: manual close after a partial leg realizes only the residual qty
 
 ------------------------------------------------------------
-TOTAL: 22  PASS: 22  FAIL: 0
+TOTAL: 24  PASS: 24  FAIL: 0
