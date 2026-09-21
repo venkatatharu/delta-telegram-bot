@@ -738,6 +738,36 @@ def t_close_after_partial():
     assert "BTCUSD" not in bot.state["positions"]
 
 
+@test("validate_trade blocks zero/negative size and bad scale-out legs")
+def t_validate_trade():
+    assert "0 contracts" in bot.validate_trade({"qty": 0})
+    assert bot.validate_trade({"qty": -5})
+    assert "whole number" in bot.validate_trade({"qty": None})
+    assert bot.validate_trade({"qty": 5}) is None
+    # legs sum above position size
+    assert bot.validate_trade({"qty": 5, "tp_mode": "scale",
+                               "tp_legs": [{"qty": 4}, {"qty": 4}]})
+    # a zero-size leg
+    assert bot.validate_trade({"qty": 5, "tp_mode": "scale",
+                               "tp_legs": [{"qty": 5}, {"qty": 0}]})
+    # valid 3+2 split
+    assert bot.validate_trade({"qty": 5, "tp_mode": "scale",
+                               "tp_legs": [{"qty": 3}, {"qty": 2}]}) is None
+
+
+@test("on_confirm blocks a zero-size order without sending it to Delta")
+def t_confirm_blocks_zero_size():
+    delta, tg, server = fresh()
+    tr = bot.new_trade_dict()
+    tr.update(symbol="BTCUSD", side="buy", qty=0, market=True,
+              sl_type="fixed", sl_price=11500, tp_mode="none")
+    tok = bot.store_pending(tr)
+    reply = bot.on_confirm(delta, tg, tok, CHAT, 0)
+    assert "0 contracts" in reply, reply
+    assert server.orders == [], "must not POST an invalid size"
+    assert tok not in bot.state["pending"]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

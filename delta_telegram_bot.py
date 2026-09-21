@@ -895,6 +895,30 @@ def margin_summary(delta: DeltaClient, trade: dict) -> str | None:
         return None
 
 
+def validate_trade(trade: dict) -> str | None:
+    """Pre-flight check so we never POST an order Delta rejects as negativeordersize.
+    Returns an error message, or None if the trade is valid."""
+    qty = trade.get("qty")
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return f"Order size must be a whole number of contracts (got {qty!r})."
+    if qty <= 0:
+        return ("Order size rounded to 0 contracts — your risk amount is too small "
+                "for this stop distance, or the quantity is invalid. Increase the "
+                "quantity/risk or widen the stop.")
+    if trade.get("tp_mode") == "scale" and trade.get("tp_legs"):
+        total = 0
+        for leg in trade["tp_legs"]:
+            lq = int(leg.get("qty", 0) or 0)
+            if lq <= 0:
+                return "Each take-profit leg must be at least 1 contract."
+            total += lq
+        if total > qty:
+            return f"Scale-out legs total {total} contracts but the position is only {qty}."
+    return None
+
+
 def on_confirm(delta: DeltaClient, tg: TelegramClient, token: str,
                chat_id, message_id) -> str:
     """The single, authoritative execution gate."""
@@ -915,6 +939,13 @@ def on_confirm(delta: DeltaClient, tg: TelegramClient, token: str,
         return (f"🛑 Circuit breaker: daily loss "
                 f"${state['stats']['daily_loss']:.2f} ≥ ${MAX_DAILY_LOSS_USDT:.2f}. "
                 "Order not placed.")
+
+    # Pre-flight: never send a zero/negative size (Delta -> negativeordersize).
+    err = validate_trade(trade)
+    if err:
+        state["pending"].pop(token, None)
+        save_state()
+        return "🛑 " + err
 
     # Margin guard — block trades that exceed available USDT in the FNO wallet.
     if ENFORCE_MARGIN_LIMIT:
@@ -1237,9 +1268,12 @@ def handle_guided_text(delta: DeltaClient, tg: TelegramClient, chat_id, text: st
             draft["step"] = "tp_leg1_pct"
         elif step == "tp_leg1_pct":
             pct = float(text)
-            leg1_qty = round_to_increment(trade["qty"] * pct / 100.0,
-                                           delta.product_size_increment(trade["symbol"]))
-            leg2_qty = trade["qty"] - leg1_qty
+            inc = delta.product_size_increment(trade["symbol"])
+            qty = int(trade["qty"])
+            leg1_qty = round_to_increment(qty * pct / 100.0, inc)
+            # keep BOTH legs >= 1 contract (prevents zero/negative leg orders)
+            leg1_qty = max(inc or 1, min(leg1_qty, qty - (inc or 1)))
+            leg2_qty = qty - leg1_qty
             trade["tp_legs"] = [{"price": trade.get("leg1_price"), "pct": pct,
                                  "qty": leg1_qty}]
             trade["_leg2_pct"] = round(100.0 - pct, 2)

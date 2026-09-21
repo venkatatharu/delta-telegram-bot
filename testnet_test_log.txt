@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-21 12:54:12
+generated: 2026-09-21 13:15:39
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -63,5 +63,9 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 
 [CASE] PnL: manual close after a partial leg realizes only the residual qty
 
+[CASE] validate_trade blocks zero/negative size and bad scale-out legs
+
+[CASE] on_confirm blocks a zero-size order without sending it to Delta
+
 ------------------------------------------------------------
-TOTAL: 24  PASS: 24  FAIL: 0
+TOTAL: 26  PASS: 26  FAIL: 0
