@@ -376,13 +376,13 @@ class DeltaClient:
         """Fetch & cache a product's contract settings (tick size, contracting price...)."""
         symbol = symbol.upper()
         if not self._products_loaded:
-            data = self._request("GET", "/v1/products")
+            data = self._request("GET", "/v2/products")
             for prod in data.get("result", []):
                 self._products[str(prod.get("symbol", "")).upper()] = prod
             self._products_loaded = True
         if symbol not in self._products:
             # targeted fallback
-            data = self._request("GET", f"/v1/products/{symbol}")
+            data = self._request("GET", f"/v2/products/{symbol}")
             self._products[symbol] = data.get("result", {})
         return self._products.get(symbol, {})
 
@@ -400,25 +400,27 @@ class DeltaClient:
         return float(prod.get("contracting_price") or prod.get("contract_value") or 1.0)
 
     def mark_price(self, symbol: str) -> float | None:
-        prod = self.get_product(symbol)
-        mp = prod.get("mark_price") or prod.get("market_price")
+        # v2 products payload has no mark_price; it lives on the ticker.
+        data = self._request("GET", f"/v2/tickers/{symbol.upper()}")
+        t = data.get("result", {}) or {}
+        mp = t.get("mark_price") or t.get("spot_price") or t.get("close")
         return float(mp) if mp else None
 
     # -- account ----------------------------------------------------------
     def get_balance(self) -> list[dict]:
-        data = self._request("GET", "/v1/wallet/balances", auth=True)
+        data = self._request("GET", "/v2/wallet/balances", auth=True)
         return data.get("result", [])
 
     def get_positions(self, symbol: str | None = None) -> list[dict]:
         params = None
         if symbol:
             params = {"product_ids": self.get_product(symbol).get("id")}
-        data = self._request("GET", "/v1/positions", params=params, auth=True)
+        data = self._request("GET", "/v2/positions", params=params, auth=True)
         return data.get("result", [])
 
     def get_order_history(self, symbol: str) -> list[dict]:
         pid = self.get_product(symbol).get("id")
-        data = self._request("GET", "/v1/orders/history",
+        data = self._request("GET", "/v2/orders/history",
                              params={"product_id": pid, "limit": 50}, auth=True)
         return data.get("result", [])
 
@@ -432,7 +434,7 @@ class DeltaClient:
         client_order_id = payload.get("client_order_id") or uuid.uuid4().hex
         payload = {**payload, "client_order_id": client_order_id}
         try:
-            data = self._request("POST", "/v1/orders", payload,
+            data = self._request("POST", "/v2/orders", payload,
                                  auth=True, idempotent=False,
                                  client_order_id=client_order_id)
         except DeltaOrderUncertain:
@@ -446,7 +448,7 @@ class DeltaClient:
 
     def _find_order_by_client_id(self, client_order_id: str) -> dict | None:
         try:
-            data = self._request("GET", "/v1/orders", auth=True)
+            data = self._request("GET", "/v2/orders", auth=True)
         except Exception:
             return None
         for o in data.get("result", []):

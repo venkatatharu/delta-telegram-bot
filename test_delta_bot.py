@@ -134,7 +134,7 @@ class FakeResp:
 
 class FakeServer:
     def __init__(self):
-        self.orders = []            # recorded order payloads (POST /v1/orders)
+        self.orders = []            # recorded order payloads (POST /v2/orders)
         self.positions = {}         # symbol -> remaining size (for monitor tests)
         self.counts = {}
         self.next_id = 1000
@@ -164,8 +164,8 @@ class FakeServer:
                 headers = {"Retry-After": "1"} if status == 429 else {}
                 return FakeResp(status, {"success": False, "error": "forced"}, headers)
 
-        # ---- POST /v1/orders (order creation) ----
-        if method == "POST" and path == "/v1/orders":
+        # ---- POST /v2/orders (order creation) ----
+        if method == "POST" and path == "/v2/orders":
             payload = json.loads(body) if body else {}
             self.next_id += 1
             order = {"id": self.next_id, **payload}
@@ -176,23 +176,29 @@ class FakeServer:
             return FakeResp(200, {"success": True, "result": order})
 
         # ---- GET endpoints ----
-        if path == "/v1/products":
+        if path == "/v2/products":
             return FakeResp(200, {"success": True, "result": PRODUCTS})
-        if path.startswith("/v1/products/"):
+        if path.startswith("/v2/products/"):
             sym = path.rsplit("/", 1)[-1]
             prod = next((p for p in PRODUCTS if p["symbol"] == sym), {})
             return FakeResp(200, {"success": True, "result": prod})
-        if path == "/v1/wallet/balances":
+        if path.startswith("/v2/tickers/"):
+            sym = path.rsplit("/", 1)[-1]
+            prod = next((p for p in PRODUCTS if p["symbol"] == sym), {})
+            mp = prod.get("mark_price", 0)
+            return FakeResp(200, {"success": True, "result": {
+                "symbol": sym, "mark_price": mp, "spot_price": mp, "close": mp}})
+        if path == "/v2/wallet/balances":
             return FakeResp(200, {"success": True, "result": [
                 {"asset": "USDT", "balance": 1000.0, "available_balance": 900.0},
                 {"asset": "BTC", "balance": 0.5, "available_balance": 0.5}]})
-        if path == "/v1/positions":
+        if path == "/v2/positions":
             result = [{"product_symbol": s, "size": sz, "entry_price": 12345.6,
                        "unrealized_pnl": 1.23} for s, sz in self.positions.items()]
             return FakeResp(200, {"success": True, "result": result})
-        if path == "/v1/orders":
+        if path == "/v2/orders":
             return FakeResp(200, {"success": True, "result": list(self.orders)})
-        if path == "/v1/orders/history":
+        if path == "/v2/orders/history":
             return FakeResp(200, {"success": True, "result": []})
         return FakeResp(404, {"success": False, "error": f"unmapped {method} {path}"})
 
@@ -508,10 +514,10 @@ def t_backoff_429():
     server = FakeServer()
     delta = bot.DeltaClient(bot.DELTA_BASE_URL, "k", "s")
     delta.session = server.session
-    server.status_seq[("GET", "/v1/wallet/balances")] = [429, 429, 200]
+    server.status_seq[("GET", "/v2/wallet/balances")] = [429, 429, 200]
     res = delta.get_balance()          # should retry through the two 429s
     assert res and res[0]["asset"] == "USDT"
-    assert server.counts[("GET", "/v1/wallet/balances")] == 3
+    assert server.counts[("GET", "/v2/wallet/balances")] == 3
 
 
 @test("F9: pure backoff/retry-after helpers")
@@ -533,10 +539,10 @@ def t_duplicate_guard():
     payload = {"product_symbol": "BTCUSD", "side": "buy", "size": 1,
                "order_type": "market_order", "client_order_id": "coid-xyz"}
     # POST will be recorded by the server, then a network error is raised on the way back
-    server.raise_network_once.add(("POST", "/v1/orders"))
+    server.raise_network_once.add(("POST", "/v2/orders"))
     result = delta.create_order(payload)     # must reconcile, not re-POST
     assert result["client_order_id"] == "coid-xyz"
-    assert server.counts[("POST", "/v1/orders")] == 1, "duplicate POST would mean a dup order"
+    assert server.counts[("POST", "/v2/orders")] == 1, "duplicate POST would mean a dup order"
     assert len(server.orders) == 1
 
 
