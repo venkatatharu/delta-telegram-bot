@@ -60,6 +60,10 @@ cp .env.example .env        # then fill in the credentials
 python -X utf8 delta_telegram_bot.py
 ```
 
+> **Windows:** create `.env` from `.env.example`, fill in your credentials, then
+> just **double-click `start_bot.bat`** — it creates the venv, installs
+> dependencies, and launches the bot for you (Ctrl+C to stop).
+
 `.env` keys (see `.env.example` for the full list):
 
 ```env
