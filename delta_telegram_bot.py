@@ -674,7 +674,7 @@ def new_trade_dict() -> dict:
 #   quick-trade and webhook path stores a pending trade and shows the ✅/❌ card;
 #   nothing executes until a Confirm press arrives here.
 # ─────────────────────────────────────────────────────────────────────────
-def build_confirmation_text(trade: dict) -> str:
+def build_confirmation_text(trade: dict, margin_line: str | None = None) -> str:
     net = f"⚠️ {NETWORK_LABEL}" + (" (testnet)" if NETWORK_LABEL == "TESTNET" else " (REAL MONEY)")
     lines = [f"🧾 *Confirm order* — `{trade['symbol']}`",
              f"Network: *{net}*",
@@ -692,6 +692,8 @@ def build_confirmation_text(trade: dict) -> str:
     elif trade.get("tp_price"):
         lines.append(f"TP: `{trade['tp_price']}`")
     lines.append(f"Source: `{trade.get('source','guided')}`")
+    if margin_line:
+        lines.append(margin_line)
     return "\n".join(lines)
 
 
@@ -703,10 +705,10 @@ def store_pending(trade: dict) -> str:
     return token
 
 
-def show_confirmation(tg: TelegramClient, chat_id, trade: dict,
+def show_confirmation(delta: DeltaClient, tg: TelegramClient, chat_id, trade: dict,
                       message_id=None) -> None:
     token = store_pending(trade)
-    text = build_confirmation_text(trade)
+    text = build_confirmation_text(trade, margin_summary(delta, trade))
     if message_id is not None:
         tg.edit_message(chat_id, message_id, text, confirm_keyboard(token))
     else:
@@ -857,7 +859,13 @@ def available_usdt(delta: DeltaClient) -> float | None:
 
 
 def estimate_margin_required(delta: DeltaClient, trade: dict) -> float | None:
-    """Estimate the initial margin a trade needs. Returns None if not computable."""
+    """Estimate the initial margin a trade needs = notional / leverage.
+
+    notional = qty * contracting_price * entry (entry falls back to mark price for
+    market orders). leverage is the trade's chosen leverage (default 10) — the same
+    value submitted on the order — so the estimate matches what Delta will reserve.
+    Returns None if it can't be computed.
+    """
     qty = trade.get("qty")
     if not qty:
         return None
@@ -867,15 +875,24 @@ def estimate_margin_required(delta: DeltaClient, trade: dict) -> float | None:
         return None
     contracting = delta.product_contracting_price(symbol) or 1.0
     notional = float(qty) * contracting * float(entry)
-    prod = delta.get_product(symbol)
-    im = prod.get("initial_margin")
-    if im:
-        try:
-            return notional * float(im)
-        except (TypeError, ValueError):
-            pass
     leverage = trade.get("leverage") or 10
     return notional / float(leverage)
+
+
+def margin_summary(delta: DeltaClient, trade: dict) -> str | None:
+    """One-line margin estimate for the confirmation card (never raises)."""
+    try:
+        need = estimate_margin_required(delta, trade)
+        if need is None:
+            return None
+        avail = available_usdt(delta)
+        if avail is None:
+            return f"Margin: ≈ `${need:,.2f}` needed (balance unavailable)"
+        ok = need <= avail * MARGIN_USAGE_LIMIT
+        return (f"Margin: ≈ `${need:,.2f}` needed / `${avail:,.2f}` available — "
+                f"{'✅ fits' if ok else '⛔ over budget'}")
+    except Exception:  # pragma: no cover - defensive
+        return None
 
 
 def on_confirm(delta: DeltaClient, tg: TelegramClient, token: str,
@@ -1240,7 +1257,7 @@ def handle_guided_text(delta: DeltaClient, tg: TelegramClient, chat_id, text: st
 
     if draft["step"] == "confirm":
         drafts.pop(str(chat_id), None)
-        show_confirmation(tg, chat_id, trade)
+        show_confirmation(delta, tg, chat_id, trade)
     else:
         _prompt_for_step(tg, chat_id, draft)
     return True
@@ -1271,7 +1288,7 @@ def handle_guided_callback(delta: DeltaClient, tg: TelegramClient, chat_id, data
             draft["step"] = "tp_leg1_price"
         else:
             drafts.pop(str(chat_id), None)
-            show_confirmation(tg, chat_id, trade)
+            show_confirmation(delta, tg, chat_id, trade)
             return True
     else:
         return False
@@ -1336,7 +1353,7 @@ def handle_message(delta: DeltaClient, tg: TelegramClient, chat_id, user_id, tex
                 return
             # Fill any risk-based sizing for the quick path too.
             try:
-                show_confirmation(tg, chat_id, trade)
+                show_confirmation(delta, tg, chat_id, trade)
             except Exception as exc:
                 tg.send_message(chat_id, f"⚠️ {exc}")
         else:
@@ -1526,7 +1543,7 @@ def start_webhook_server(delta: DeltaClient, tg: TelegramClient, chat_id: str):
         trade = webhook_trade_from_payload(payload)
         if not trade or not trade.get("qty"):
             return jsonify({"ok": False, "error": "payload missing symbol/action/qty"}), 400
-        show_confirmation(tg, chat_id, trade)  # <-- confirm card only, never executes
+        show_confirmation(delta, tg, chat_id, trade)  # <-- confirm card only, never executes
         return jsonify({"ok": True, "queued": trade["symbol"]}), 202
 
     @app.route("/health")

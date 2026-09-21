@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-21 11:47:40
+generated: 2026-09-21 12:54:12
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -11,7 +11,7 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 [CASE] base: read-only commands work & never place orders
 
 [CASE] NON-NEGOTIABLE: guided risk+trailing+scale-out shows confirm, no order until ✅
-    · confirmation card shown: 🧾 *Confirm order* — `BTCUSD` / Network: *⚠️ TESTNET (testnet)* / Side: `buy`  Qty: `500` contracts / Sizing: `risk`  Entry: market / SL: trailing `100.0` / TP: scale-out `13000.0`×60.0%, `14000.0`×40.0% / Source: `guided`
+    · confirmation card shown: 🧾 *Confirm order* — `BTCUSD` / Network: *⚠️ TESTNET (testnet)* / Side: `buy`  Qty: `500` contracts / Sizing: `risk`  Entry: market / SL: trailing `100.0` / TP: scale-out `13000.0`×60.0%, `14000.0`×40.0% / Source: `guided` / Margin: ≈ `$617.28` needed / `$900.00` available — ✅ fits
     · orders sent to exchange BEFORE confirm: 0
     · orders after confirm: entry buy 500 (trailing_stop_loss_order) + TP legs [300, 200] reduce_only
 

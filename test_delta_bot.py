@@ -337,6 +337,7 @@ def t_guided_gate_and_features():
     assert "scale-out" in card["text"]
     # risk qty: distance=trail 100 * contracting 0.001 = 0.1 /contract; 50/0.1=500
     assert "Qty: `500`" in card["text"], card["text"]
+    assert "Margin:" in card["text"] and "✅ fits" in card["text"], card["text"]
 
     # THE RULE: nothing submitted to the exchange yet
     assert server.orders == [], "order placed before confirm!"
@@ -520,7 +521,7 @@ def t_webhook_confirm_only():
                "price": 12100, "sl": 11800, "tp": 13000}
     tr = bot.webhook_trade_from_payload(payload)
     assert tr and tr["source"] == "webhook" and tr["side"] == "buy" and tr["qty"] == 4
-    bot.show_confirmation(tg, CHAT, tr)
+    bot.show_confirmation(delta, tg, CHAT, tr)
     token, mid = tg.find_keyboard("cfm:")
     assert token, "webhook must present a confirmation card"
     assert server.orders == [], "webhook must never auto-execute"
