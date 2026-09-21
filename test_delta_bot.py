@@ -415,6 +415,38 @@ def t_circuit_breaker():
     assert tok not in bot.state["pending"]
 
 
+@test("Margin guard: blocks a trade whose required margin exceeds available USDT")
+def t_margin_guard_blocks():
+    delta, tg, server = fresh()
+    # fake USDT available = 900; qty 1000 * 0.001 * 12000 = 12000 notional / 10 = 1200 margin
+    assert bot.estimate_margin_required(
+        delta, {"symbol": "BTCUSD", "qty": 1000, "entry": 12000, "leverage": 10}) == 1200.0
+    assert bot.available_usdt(delta) == 900.0
+    tr = bot.new_trade_dict()
+    tr.update(symbol="BTCUSD", side="buy", qty=1000, market=True,
+              entry=12000, sl_type="fixed", sl_price=11500, tp_mode="none")
+    tok = bot.store_pending(tr)
+    before = len(server.orders)
+    reply = bot.on_confirm(delta, tg, tok, CHAT, 0)
+    say("oversized confirm", f"blocked: {reply!r}")
+    assert "Blocked" in reply, reply
+    assert len(server.orders) == before, "must not place an oversized order"
+    assert tok not in bot.state["pending"], "token consumed on block"
+
+
+@test("Margin guard: allows a trade that fits within available USDT")
+def t_margin_guard_allows():
+    delta, tg, server = fresh()
+    # qty 100 * 0.001 * 12000 = 1200 notional / 10 = 120 margin <= 900
+    tr = bot.new_trade_dict()
+    tr.update(symbol="BTCUSD", side="buy", qty=100, market=True,
+              entry=12000, sl_type="fixed", sl_price=11500, tp_mode="none")
+    tok = bot.store_pending(tr)
+    reply = bot.on_confirm(delta, tg, tok, CHAT, 0)
+    assert "Placed" in reply, reply
+    assert len(server.orders) == 1, server.orders
+
+
 @test("F6: quick trade builds the same dict and routes to the SAME confirm step")
 def t_quick():
     delta, tg, server = fresh()

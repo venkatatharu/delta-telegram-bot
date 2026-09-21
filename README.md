@@ -51,6 +51,10 @@ Only the Telegram user whose id matches `TELEGRAM_OWNER_ID` can drive the bot.
 9. **Retry / backoff** — the Delta client retries network errors and HTTP 429/5xx with
    exponential backoff (honouring `Retry-After`); order POSTs use a `client_order_id`
    and reconcile ambiguous failures so a retry can't double-submit.
+10. **Margin guard** — at the confirm step the bot estimates the trade's initial margin
+    (notional × product `initial_margin`, else notional ÷ leverage) and **blocks** it if
+    that exceeds your available USDT in the FNO (futures) wallet. Toggle with
+    `ENFORCE_MARGIN_LIMIT` and keep a buffer with `MARGIN_USAGE_LIMIT` (e.g. `0.9`).
 
 ## Setup
 

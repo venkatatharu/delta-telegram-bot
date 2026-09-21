@@ -105,6 +105,12 @@ NETWORK_LABEL = "TESTNET" if DELTA_BASE_URL == TESTNET_BASE_URL else "LIVE"
 MAX_DAILY_LOSS_USDT = float(os.getenv("MAX_DAILY_LOSS_USDT", "100"))
 POSITION_POLL_SECONDS = int(os.getenv("POSITION_POLL_SECONDS", "20"))
 
+# Margin guard: block any new trade whose estimated initial margin exceeds the
+# available USDT in the FNO (futures) wallet. Set ENFORCE_MARGIN_LIMIT=false to
+# disable; lower MARGIN_USAGE_LIMIT (e.g. 0.9) to keep a safety buffer.
+ENFORCE_MARGIN_LIMIT = _env_bool("ENFORCE_MARGIN_LIMIT", default=True)
+MARGIN_USAGE_LIMIT = float(os.getenv("MARGIN_USAGE_LIMIT", "1.0"))
+
 STATE_FILE   = Path(os.getenv("DELTA_STATE_FILE", "delta_bot_state.json"))
 JOURNAL_FILE = Path(os.getenv("DELTA_JOURNAL_FILE", "trade_journal.csv"))
 
@@ -832,6 +838,46 @@ def close_position(delta: DeltaClient, symbol: str, reason: str = "manual") -> N
     save_state()
 
 
+def available_usdt(delta: DeltaClient) -> float | None:
+    """Available USDT/USD margin in the FNO (futures) wallet, or None if unknown."""
+    try:
+        resp = delta.get_balance()
+    except Exception as exc:  # pragma: no cover - network
+        log.warning("margin guard: balance fetch failed: %s", exc)
+        return None
+    items = resp.get("result", []) if isinstance(resp, dict) else resp
+    for b in items:
+        sym = (b.get("asset_symbol") or b.get("currency") or b.get("asset") or "").upper()
+        if sym in ("USDT", "USD"):
+            try:
+                return float(b.get("available_balance", 0))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def estimate_margin_required(delta: DeltaClient, trade: dict) -> float | None:
+    """Estimate the initial margin a trade needs. Returns None if not computable."""
+    qty = trade.get("qty")
+    if not qty:
+        return None
+    symbol = trade["symbol"]
+    entry = trade.get("entry") or delta.mark_price(symbol)
+    if not entry:
+        return None
+    contracting = delta.product_contracting_price(symbol) or 1.0
+    notional = float(qty) * contracting * float(entry)
+    prod = delta.get_product(symbol)
+    im = prod.get("initial_margin")
+    if im:
+        try:
+            return notional * float(im)
+        except (TypeError, ValueError):
+            pass
+    leverage = trade.get("leverage") or 10
+    return notional / float(leverage)
+
+
 def on_confirm(delta: DeltaClient, tg: TelegramClient, token: str,
                chat_id, message_id) -> str:
     """The single, authoritative execution gate."""
@@ -852,6 +898,17 @@ def on_confirm(delta: DeltaClient, tg: TelegramClient, token: str,
         return (f"🛑 Circuit breaker: daily loss "
                 f"${state['stats']['daily_loss']:.2f} ≥ ${MAX_DAILY_LOSS_USDT:.2f}. "
                 "Order not placed.")
+
+    # Margin guard — block trades that exceed available USDT in the FNO wallet.
+    if ENFORCE_MARGIN_LIMIT:
+        avail = available_usdt(delta)
+        need = estimate_margin_required(delta, trade)
+        if avail is not None and need is not None and need > avail * MARGIN_USAGE_LIMIT:
+            state["pending"].pop(token, None)
+            save_state()
+            return (f"🛑 Blocked: this trade needs ≈ ${need:,.2f} margin but only "
+                    f"${avail:,.2f} USDT is available in your FNO wallet. Reduce "
+                    "size/risk, lower leverage, or transfer Spot → Futures.")
 
     # Consume the token FIRST so a double-press can't double-place.
     state["pending"].pop(token, None)
