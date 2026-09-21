@@ -813,6 +813,23 @@ def t_guided_limit_and_leverage():
     assert "Leverage: `25x`" in card["text"], card["text"]
 
 
+@test("/positions all scans markets and finds positions opened anywhere")
+def t_positions_all():
+    delta, tg, server = fresh()
+    # bot tracks nothing, but an open BTCUSD exists on the exchange
+    server.positions["BTCUSD"] = 5
+    bot.cmd_positions(delta, tg, CHAT, "all")
+    msg = next(t for t in tg.texts() if "Scanning" in t)
+    assert "BTCUSD" in msg and "5" in msg, msg
+
+    # now flat -> scan reports none
+    server.positions["BTCUSD"] = 0
+    tg.sent.clear()
+    bot.cmd_positions(delta, tg, CHAT, "all")
+    msg2 = next(t for t in tg.texts() if "Scanning" in t)
+    assert "no open positions" in msg2, msg2
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

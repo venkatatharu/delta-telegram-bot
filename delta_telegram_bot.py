@@ -18,7 +18,7 @@ Commands
   /help                 Command reference
   /trade                Guided flow (symbol -> side -> sizing -> SL -> TP -> confirm)
   /trade SYMBOL side qty entry sl=X tp=Y   One-line quick trade -> same confirm step
-  /positions            Open positions tracked on the exchange
+  /positions            Tracked · /positions SYMBOL · /positions all (scan markets)
   /balance              Wallet balances
   /pnl                  Realised / unrealised P&L summary
   /close SYMBOL         Close a tracked position (via confirm)
@@ -110,6 +110,13 @@ POSITION_POLL_SECONDS = int(os.getenv("POSITION_POLL_SECONDS", "20"))
 # disable; lower MARGIN_USAGE_LIMIT (e.g. 0.9) to keep a safety buffer.
 ENFORCE_MARGIN_LIMIT = _env_bool("ENFORCE_MARGIN_LIMIT", default=True)
 MARGIN_USAGE_LIMIT = float(os.getenv("MARGIN_USAGE_LIMIT", "1.0"))
+
+# Markets scanned by '/positions all' (v2 has no unfiltered positions endpoint,
+# so we query these by product_id). Add your own comma-separated symbols.
+POSITION_SCAN_SYMBOLS = [s.strip().upper() for s in os.getenv(
+    "POSITION_SCAN_SYMBOLS",
+    "BTCUSD,ETHUSD,SOLUSD,XRPUSD,DOGEUSD,ADAUSD,BNBUSD,LTCUSD,AVAXUSD,BCHUSD,PAXGUSD"
+).split(",") if s.strip()]
 
 STATE_FILE   = Path(os.getenv("DELTA_STATE_FILE", "delta_bot_state.json"))
 JOURNAL_FILE = Path(os.getenv("DELTA_JOURNAL_FILE", "trade_journal.csv"))
@@ -423,6 +430,8 @@ class DeltaClient:
         if not symbol:
             return []
         pid = self.get_product(symbol).get("id")
+        if pid is None:                 # unknown symbol -> no position to query
+            return []
         data = self._request("GET", "/v2/positions", params={"product_id": pid}, auth=True)
         res = data.get("result", [])
         if isinstance(res, dict):          # product_id form returns a single object
@@ -1064,7 +1073,7 @@ def cmd_help(tg: TelegramClient, chat_id):
         "*Commands*\n"
         "/trade — guided order flow (fixed/risk sizing, fixed/trailing SL, scale-out TP)\n"
         "/trade SYMBOL side qty entry sl=X tp=Y — one-line quick trade\n"
-        "/positions — open positions on the exchange\n"
+        "/positions — tracked · /positions SYMBOL — one market · /positions all — scan\n"
         "/balance — wallet balances\n"
         "/pnl — realised + unrealised P&L\n"
         "/close SYMBOL — close a tracked position (asks to confirm)\n"
@@ -1097,11 +1106,32 @@ def cmd_balance(delta: DeltaClient, tg: TelegramClient, chat_id):
 
 
 def cmd_positions(delta: DeltaClient, tg: TelegramClient, chat_id, symbol: str | None = None):
+    # /positions all -> scan tracked + popular markets (v2 has no unfiltered call)
+    if symbol and symbol.lower() == "all":
+        syms = list(dict.fromkeys(list(state["positions"].keys()) + POSITION_SCAN_SYMBOLS))
+        lines = [f"📊 *Scanning {len(syms)} markets* ({NETWORK_LABEL})"]
+        found = 0
+        for sym in syms:
+            try:
+                rows = [p for p in delta.get_positions(sym) if abs(float(p.get("size", 0) or 0)) > 0]
+            except Exception:
+                continue
+            for p in rows:
+                found += 1
+                upnl = float(p.get("unrealized_pnl", 0) or 0)
+                lines.append(f"• `{p.get('product_symbol', sym)}` {p.get('size')} @ "
+                             f"{p.get('entry_price')} | uPnL {upnl:.2f}")
+        if not found:
+            lines.append("— no open positions found across these markets —")
+            lines.append("Tip: add symbols via POSITION_SCAN_SYMBOLS in .env")
+        tg.send_message(chat_id, "\n".join(lines))
+        return
+
     symbols = [symbol.upper()] if symbol else list(state["positions"].keys())
     if not symbols:
         tg.send_message(chat_id,
-            "📭 No positions tracked by the bot. Use /trade to open, or "
-            "`/positions BTCUSD` to check a specific market.")
+            "📭 No positions tracked by the bot. Use /trade to open, "
+            "`/positions SYMBOL` to check one, or `/positions all` to scan.")
         return
     lines = [f"📊 *Positions* ({NETWORK_LABEL})"]
     any_open = False

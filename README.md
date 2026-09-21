@@ -23,7 +23,7 @@ signal generation and nothing executes on its own.
 | `/help` | Command reference |
 | `/trade` | App-like guided flow: symbol (shows **market type + live price**) → side → **Market/Limit** → **leverage** (5/10/20/50 or custom) → **Fixed/Risk** sizing → **Fixed/Trailing SL** → **single/scale-out TP** → confirm |
 | `/trade SYMBOL side qty entry sl=X tp=Y` | One-line quick trade (also `trail=`/`lev=`, `entry=market`) → the **same** confirm step |
-| `/positions` | Open positions from the exchange |
+| `/positions` | List bot-tracked positions · `/positions SYMBOL` check one market · `/positions all` scan popular markets (catches trades opened anywhere) |
 | `/balance` | Wallet balances |
 | `/pnl` | Realised + unrealised P&L and daily-loss usage |
 | `/close SYMBOL` | Close a tracked position (asks to confirm) |
