@@ -830,6 +830,22 @@ def t_positions_all():
     assert "no open positions" in msg2, msg2
 
 
+@test("/positions all auto-includes markets with a non-zero balance")
+def t_positions_all_balances():
+    orig = bot.POSITION_SCAN_SYMBOLS
+    try:
+        bot.POSITION_SCAN_SYMBOLS = []          # rely purely on balances
+        delta, tg, server = fresh()
+        # fake balances: USDT 1000 (skip), BTC 0.25, ETH 10 -> BTCUSD, ETHUSD
+        assert set(bot.balance_derived_symbols(delta)) == {"BTCUSD", "ETHUSD"}
+        server.positions["ETHUSD"] = 3
+        bot.cmd_positions(delta, tg, CHAT, "all")
+        msg = next(t for t in tg.texts() if "Scanning" in t)
+        assert "ETHUSD" in msg and "3" in msg, msg
+    finally:
+        bot.POSITION_SCAN_SYMBOLS = orig
+
+
 # ─────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 68)

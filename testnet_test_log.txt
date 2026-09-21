@@ -1,5 +1,5 @@
 Delta Telegram Bot — testnet test log
-generated: 2026-09-21 14:41:51
+generated: 2026-09-21 14:49:19
 network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 ============================================================
 
@@ -71,5 +71,7 @@ network under test: https://cdn-ind.testnet.deltaex.org (TESTNET)
 
 [CASE] /positions all scans markets and finds positions opened anywhere
 
+[CASE] /positions all auto-includes markets with a non-zero balance
+
 ------------------------------------------------------------
-TOTAL: 28  PASS: 28  FAIL: 0
+TOTAL: 29  PASS: 29  FAIL: 0

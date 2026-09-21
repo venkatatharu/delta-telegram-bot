@@ -1105,10 +1105,36 @@ def cmd_balance(delta: DeltaClient, tg: TelegramClient, chat_id):
     tg.send_message(chat_id, "\n".join(lines))
 
 
+def balance_derived_symbols(delta: DeltaClient) -> list[str]:
+    """Perpetual symbols derived from non-zero wallet balances (BTC -> BTCUSD)."""
+    syms: list[str] = []
+    try:
+        resp = delta.get_balance()
+    except Exception:
+        return syms
+    items = resp.get("result", []) if isinstance(resp, dict) else resp
+    skip = {"USDT", "USD", "USDC", "INR", "REF_USD"}
+    for b in items or []:
+        try:
+            bal = float(b.get("balance", 0) or 0)
+        except (TypeError, ValueError):
+            bal = 0.0
+        if bal <= 0:
+            continue
+        a = str(b.get("asset_symbol") or b.get("currency") or b.get("asset") or "").upper()
+        if not a or a in skip or a.endswith("USD"):
+            continue
+        cand = a + "USD"
+        if cand not in syms:
+            syms.append(cand)
+    return syms
+
+
 def cmd_positions(delta: DeltaClient, tg: TelegramClient, chat_id, symbol: str | None = None):
-    # /positions all -> scan tracked + popular markets (v2 has no unfiltered call)
+    # /positions all -> scan tracked + held-balance markets + popular list
     if symbol and symbol.lower() == "all":
-        syms = list(dict.fromkeys(list(state["positions"].keys()) + POSITION_SCAN_SYMBOLS))
+        syms = list(dict.fromkeys(
+            list(state["positions"].keys()) + balance_derived_symbols(delta) + POSITION_SCAN_SYMBOLS))
         lines = [f"📊 *Scanning {len(syms)} markets* ({NETWORK_LABEL})"]
         found = 0
         for sym in syms:
@@ -1123,7 +1149,7 @@ def cmd_positions(delta: DeltaClient, tg: TelegramClient, chat_id, symbol: str |
                              f"{p.get('entry_price')} | uPnL {upnl:.2f}")
         if not found:
             lines.append("— no open positions found across these markets —")
-            lines.append("Tip: add symbols via POSITION_SCAN_SYMBOLS in .env")
+            lines.append("Tip: scans your balances + POSITION_SCAN_SYMBOLS in .env")
         tg.send_message(chat_id, "\n".join(lines))
         return
 
